@@ -28,7 +28,6 @@ jobs:
       with:
         images: |
           ${{ steps.docker_image_name.outputs.value }}
-          ghcr.io/${{ steps.docker_image_name.outputs.value }}
         tags: type=raw,value=latest
         
     - name: Login to Docker Hub
@@ -36,13 +35,6 @@ jobs:
       with:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
-    
-    - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.repository_owner }}
-        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
