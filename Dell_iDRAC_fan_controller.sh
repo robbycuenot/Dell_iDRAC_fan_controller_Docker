@@ -16,50 +16,101 @@ trap 'graceful_exit' SIGINT SIGQUIT SIGTERM
 # Check if FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
 if [[ $FAN_SPEED == 0x* ]]; then
   readonly DECIMAL_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$FAN_SPEED")
-  readonly HEXADECIMAL_FAN_SPEED=$FAN_SPEED
+  # Unused
+  # readonly HEXADECIMAL_FAN_SPEED=$FAN_SPEED
 else
   readonly DECIMAL_FAN_SPEED=$FAN_SPEED
-  readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
+  # Unused
+  # readonly HEXADECIMAL_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$FAN_SPEED")
+fi
+
+# Check if fan speed interpolation is enabled
+if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=false
+  
+  # We define these variables to the same values than user fan control profile
+  readonly HIGH_FAN_SPEED=$FAN_SPEED
+  readonly CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$CPU_TEMPERATURE_THRESHOLD
+elif [[ "$FAN_SPEED" -gt "$HIGH_FAN_SPEED" ]]; then
+  echo 'Error : $FAN_SPEED have to be less or equal to $HIGH_FAN_SPEED. Exiting.'
+  exit 1
+else
+  readonly FAN_SPEED_INTERPOLATION_ENABLED=true
+fi
+
+# Check if HIGH_FAN_SPEED variable is in hexadecimal format. If not, convert it to hexadecimal
+if [[ $HIGH_FAN_SPEED == 0x* ]]; then
+  readonly DECIMAL_HIGH_FAN_SPEED=$(convert_hexadecimal_value_to_decimal "$HIGH_FAN_SPEED")
+  # Unused
+  # readonly HEXADECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+else
+  readonly DECIMAL_HIGH_FAN_SPEED=$HIGH_FAN_SPEED
+  # Unused
+  # readonly HEXADECIMAL_HIGH_FAN_SPEED=$(convert_decimal_value_to_hexadecimal "$HIGH_FAN_SPEED")
 fi
 
 # Check if the iDRAC host is set to 'local' or not then set the IDRAC_LOGIN_STRING accordingly
 if [[ $IDRAC_HOST == "local" ]]; then
   # Check that the Docker host IPMI device (the iDRAC) has been exposed to the Docker container
   if [ ! -e "/dev/ipmi0" ] && [ ! -e "/dev/ipmi/0" ] && [ ! -e "/dev/ipmidev/0" ]; then
-    print_error_and_exit "Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0, check that you added the device to your Docker container or stop using local mode"
+    echo "/!\ Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0, check that you added the device to your Docker container or stop using local mode. Exiting." >&2
+    exit 1
   fi
   IDRAC_LOGIN_STRING='open'
 else
   echo "iDRAC/IPMI username: $IDRAC_USERNAME"
-  #echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
+  echo "iDRAC/IPMI password: $IDRAC_PASSWORD"
   IDRAC_LOGIN_STRING="lanplus -H $IDRAC_HOST -U $IDRAC_USERNAME -P $IDRAC_PASSWORD"
 fi
 
 get_Dell_server_model
 
 if [[ ! $SERVER_MANUFACTURER == "DELL" ]]; then
-  print_error_and_exit "Your server isn't a Dell product"
+  echo "/!\ Your server isn't a Dell product. Exiting." >&2
+  exit 1
 fi
 
 # If server model is Gen 14 (*40) or newer
+# Add special case for 4 cpu Gen 13 servers (only tested on R930) R8** can be 2 or 4 cpu, R9** are 4 cpu.
 if [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[0-9][4-9]0.* ]]; then
   readonly DELL_POWEREDGE_GEN_14_OR_NEWER=true
   readonly CPU1_TEMPERATURE_INDEX=2
   readonly CPU2_TEMPERATURE_INDEX=4
+  readonly CPU3_TEMPERATURE_INDEX=6
+  readonly CPU4_TEMPERATURE_INDEX=8  
+elif [[ $SERVER_MODEL =~ .*[RT][[:space:]]?[8-9][3]0.* ]]; then
+  readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
+  readonly CPU1_TEMPERATURE_INDEX=2
+  readonly CPU2_TEMPERATURE_INDEX=4
+  readonly CPU3_TEMPERATURE_INDEX=6
+  readonly CPU4_TEMPERATURE_INDEX=8  
 else
   readonly DELL_POWEREDGE_GEN_14_OR_NEWER=false
   readonly CPU1_TEMPERATURE_INDEX=1
   readonly CPU2_TEMPERATURE_INDEX=2
+  readonly CPU3_TEMPERATURE_INDEX=3
+  readonly CPU4_TEMPERATURE_INDEX=4  
 fi
 
 # Log main informations
 echo "Server model: $SERVER_MANUFACTURER $SERVER_MODEL"
 echo "iDRAC/IPMI host: $IDRAC_HOST"
 
-# Log the fan speed objective, CPU temperature threshold and check interval
-echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
-echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+# Log the check interval, fan speed objective and CPU temperature threshold
 echo "Check interval: ${CHECK_INTERVAL}s"
+echo "Fan speed interpolation enabled: $FAN_SPEED_INTERPOLATION_ENABLED"
+if $FAN_SPEED_INTERPOLATION_ENABLED; then
+  echo "Fan speed lower value: $DECIMAL_FAN_SPEED%"
+  echo "Fan speed higher value: $DECIMAL_HIGH_FAN_SPEED%"
+  echo "CPU lower temperature threshold: $CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION°C"
+  echo "CPU higher temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+  echo ""
+  # Print interpolated fan speeds for demonstration
+  print_interpolated_fan_speeds "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED"
+else
+  echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
+  echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
+fi
 echo ""
 
 # Define the interval for printing
@@ -71,7 +122,9 @@ IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
 # Check present sensors
 IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
 IS_CPU2_TEMPERATURE_SENSOR_PRESENT=true
-retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+IS_CPU3_TEMPERATURE_SENSOR_PRESENT=true
+IS_CPU4_TEMPERATURE_SENSOR_PRESENT=true
+retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU3_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU4_TEMPERATURE_SENSOR_PRESENT"
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
@@ -80,6 +133,13 @@ if [ -z "$CPU2_TEMPERATURE" ]; then
   echo "No CPU2 temperature sensor detected."
   IS_CPU2_TEMPERATURE_SENSOR_PRESENT=false
 fi
+if [ -z "$CPU3_TEMPERATURE" ]; then
+  echo "No CPU3 temperature sensor detected."
+  IS_CPU3_TEMPERATURE_SENSOR_PRESENT=false
+fi
+if [ -z "$CPU4_TEMPERATURE" ]; then
+  echo "No CPU4 temperature sensor detected."
+  IS_CPU4_TEMPERATURE_SENSOR_PRESENT=false
 # Output new line to beautify output if one of the previous conditions have echoed
 if ! $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT || ! $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
   echo ""
@@ -91,7 +151,7 @@ while true; do
   sleep $CHECK_INTERVAL &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+  retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
@@ -118,8 +178,14 @@ while true; do
       IS_DELL_FAN_CONTROL_PROFILE_APPLIED=true
       COMMENT="CPU 2 temperature is too high, Dell default dynamic fan control profile applied for safety"
     fi
+  elif CPU1_HEATING || CPU2_HEATING; then
+    HIGHEST_CPU_TEMPERATURE=$CPU1_TEMPERATURE
+    if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
+      HIGHEST_CPU_TEMPERATURE=$(max $CPU1_TEMPERATURE $CPU2_TEMPERATURE)
+    fi
+    apply_user_fan_control_profile 2 $(calculate_interpolated_fan_speed "$HIGHEST_CPU_TEMPERATURE" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED")
   else
-    apply_user_fan_control_profile
+    apply_user_fan_control_profile 1 $DECIMAL_FAN_SPEED
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
@@ -144,10 +210,10 @@ while true; do
   # Print temperatures, active fan control profile and comment if any change happened during last time interval
   if [ $i -eq $TABLE_HEADER_PRINT_INTERVAL ]; then
     echo "                     ------- Temperatures -------"
-    echo "    Date & time      Inlet  CPU 1  CPU 2  Exhaust          Active fan speed profile          Third-party PCIe card Dell default cooling response  Comment"
+    echo "    Date & time      Inlet  CPU 1  CPU 2  CPU 3  CPU 4  Exhaust          Active fan speed profile          PCIe card cooling  Comment"
     i=0
   fi
-  printf "%19s  %3d°C  %3d°C  %3s°C  %5s°C  %40s  %51s  %s\n" "$(date +"%d-%m-%Y %T")" $INLET_TEMPERATURE $CPU1_TEMPERATURE "$CPU2_TEMPERATURE" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
+  printf "%19s  %3d°C  %3d°C  %3s°C  %3s°C  %3s°C  %5s°C  %40s  %12s  %9s\n" "$(date +"%d-%m-%Y %T")" $INLET_TEMPERATURE $CPU1_TEMPERATURE "$CPU2_TEMPERATURE" "$CPU3_TEMPERATURE" "$CPU4_TEMPERATURE" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
   ((i++))
   wait $SLEEP_PROCESS_PID
 done
