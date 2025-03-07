@@ -27,7 +27,7 @@ fi
 # Check if fan speed interpolation is enabled
 if [ -z "$HIGH_FAN_SPEED" ] || [ -z "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" ]; then
   readonly FAN_SPEED_INTERPOLATION_ENABLED=false
-  
+
   # We define these variables to the same values than user fan control profile
   readonly HIGH_FAN_SPEED=$FAN_SPEED
   readonly CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION=$CPU_TEMPERATURE_THRESHOLD
@@ -106,7 +106,11 @@ if $FAN_SPEED_INTERPOLATION_ENABLED; then
   echo "CPU higher temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
   echo ""
   # Print interpolated fan speeds for demonstration
-  print_interpolated_fan_speeds "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED"
+  print_interpolated_fan_speeds \
+    "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" \
+    "$CPU_TEMPERATURE_THRESHOLD" \
+    "$DECIMAL_FAN_SPEED" \
+    "$DECIMAL_HIGH_FAN_SPEED"
 else
   echo "Fan speed objective: $DECIMAL_FAN_SPEED%"
   echo "CPU temperature threshold: $CPU_TEMPERATURE_THRESHOLD°C"
@@ -124,7 +128,12 @@ IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=true
 IS_CPU2_TEMPERATURE_SENSOR_PRESENT=true
 IS_CPU3_TEMPERATURE_SENSOR_PRESENT=true
 IS_CPU4_TEMPERATURE_SENSOR_PRESENT=true
-retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU3_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU4_TEMPERATURE_SENSOR_PRESENT"
+retrieve_temperatures \
+  "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" \
+  "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT" \
+  "$IS_CPU3_TEMPERATURE_SENSOR_PRESENT" \
+  "$IS_CPU4_TEMPERATURE_SENSOR_PRESENT"
+
 if [ -z "$EXHAUST_TEMPERATURE" ]; then
   echo "No exhaust temperature sensor detected."
   IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=false
@@ -140,6 +149,8 @@ fi
 if [ -z "$CPU4_TEMPERATURE" ]; then
   echo "No CPU4 temperature sensor detected."
   IS_CPU4_TEMPERATURE_SENSOR_PRESENT=false
+fi
+
 # Output new line to beautify output if one of the previous conditions have echoed
 if ! $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT || ! $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
   echo ""
@@ -151,7 +162,11 @@ while true; do
   sleep $CHECK_INTERVAL &
   SLEEP_PROCESS_PID=$!
 
-  retrieve_temperatures "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
+  retrieve_temperatures \
+    "$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT" \
+    "$IS_CPU2_TEMPERATURE_SENSOR_PRESENT" \
+    "$IS_CPU3_TEMPERATURE_SENSOR_PRESENT" \
+    "$IS_CPU4_TEMPERATURE_SENSOR_PRESENT"
 
   # Initialize a variable to store the comments displayed when the fan control profile changed
   COMMENT=" -"
@@ -181,11 +196,16 @@ while true; do
   elif CPU1_HEATING || CPU2_HEATING; then
     HIGHEST_CPU_TEMPERATURE=$CPU1_TEMPERATURE
     if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-      HIGHEST_CPU_TEMPERATURE=$(max $CPU1_TEMPERATURE $CPU2_TEMPERATURE)
+      HIGHEST_CPU_TEMPERATURE=$(max "$CPU1_TEMPERATURE" "$CPU2_TEMPERATURE")
     fi
-    apply_user_fan_control_profile 2 $(calculate_interpolated_fan_speed "$HIGHEST_CPU_TEMPERATURE" "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" "$CPU_TEMPERATURE_THRESHOLD" "$DECIMAL_FAN_SPEED" "$DECIMAL_HIGH_FAN_SPEED")
+    apply_user_fan_control_profile 2 \
+      "$(calculate_interpolated_fan_speed "$HIGHEST_CPU_TEMPERATURE" \
+                                          "$CPU_TEMPERATURE_THRESHOLD_FOR_FAN_SPEED_INTERPOLATION" \
+                                          "$CPU_TEMPERATURE_THRESHOLD" \
+                                          "$DECIMAL_FAN_SPEED" \
+                                          "$DECIMAL_HIGH_FAN_SPEED")"
   else
-    apply_user_fan_control_profile 1 $DECIMAL_FAN_SPEED
+    apply_user_fan_control_profile 1 "$DECIMAL_FAN_SPEED"
 
     # Check if user fan control profile is applied then apply it if not
     if $IS_DELL_FAN_CONTROL_PROFILE_APPLIED; then
@@ -213,7 +233,17 @@ while true; do
     echo "    Date & time      Inlet  CPU 1  CPU 2  CPU 3  CPU 4  Exhaust          Active fan speed profile          PCIe card cooling  Comment"
     i=0
   fi
-  printf "%19s  %3d°C  %3d°C  %3s°C  %3s°C  %3s°C  %5s°C  %40s  %12s  %9s\n" "$(date +"%d-%m-%Y %T")" $INLET_TEMPERATURE $CPU1_TEMPERATURE "$CPU2_TEMPERATURE" "$CPU3_TEMPERATURE" "$CPU4_TEMPERATURE" "$EXHAUST_TEMPERATURE" "$CURRENT_FAN_CONTROL_PROFILE" "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" "$COMMENT"
+  printf "%19s  %3d°C  %3d°C  %3s°C  %3s°C  %3s°C  %5s°C  %40s  %12s  %9s\n" \
+    "$(date +"%d-%m-%Y %T")" \
+    "$INLET_TEMPERATURE" \
+    "$CPU1_TEMPERATURE" \
+    "$CPU2_TEMPERATURE" \
+    "$CPU3_TEMPERATURE" \
+    "$CPU4_TEMPERATURE" \
+    "$EXHAUST_TEMPERATURE" \
+    "$CURRENT_FAN_CONTROL_PROFILE" \
+    "$THIRD_PARTY_PCIE_CARD_DELL_DEFAULT_COOLING_RESPONSE_STATUS" \
+    "$COMMENT"
   ((i++))
   wait $SLEEP_PROCESS_PID
 done
