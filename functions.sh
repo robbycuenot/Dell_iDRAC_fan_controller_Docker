@@ -1,3 +1,5 @@
+# functions.sh
+
 # Define global functions
 # This function applies Dell's default dynamic fan control profile
 function apply_Dell_fan_control_profile() {
@@ -32,33 +34,87 @@ function convert_hexadecimal_value_to_decimal() {
   echo $DECIMAL_NUMBER
 }
 
-# Retrieve temperature sensors data using ipmitool
-# Usage : retrieve_temperatures $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT $IS_CPU2_TEMPERATURE_SENSOR_PRESENT
+################################################################################
+#   Updated retrieve_temperatures function that expects four parameters
+#
+#   Usage:
+#      retrieve_temperatures <IS_EXHAUST_PRESENT> \
+#                            <IS_CPU2_PRESENT> \
+#                            <IS_CPU3_PRESENT> \
+#                            <IS_CPU4_PRESENT>
+#
+#   - Sets CPU1_TEMPERATURE, CPU2_TEMPERATURE, CPU3_TEMPERATURE, CPU4_TEMPERATURE,
+#     INLET_TEMPERATURE, and EXHAUST_TEMPERATURE (if “present” is true).
+#   - Expects the global variables:
+#       $IDRAC_LOGIN_STRING, $CPU1_TEMPERATURE_INDEX, $CPU2_TEMPERATURE_INDEX,
+#       $CPU3_TEMPERATURE_INDEX, $CPU4_TEMPERATURE_INDEX
+#   - If a sensor is not “present” or not found, we set it to "-" to avoid errors.
+################################################################################
 function retrieve_temperatures() {
-  if (( $# != 2 )); then
-    print_error "Illegal number of parameters.\nUsage: retrieve_temperatures \$IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT \$IS_CPU2_TEMPERATURE_SENSOR_PRESENT"
+  if [ $# -ne 4 ]; then
+    print_error "Illegal number of parameters.\nUsage: retrieve_temperatures <IS_EXHAUST_PRESENT> <IS_CPU2_PRESENT> <IS_CPU3_PRESENT> <IS_CPU4_PRESENT>"
     return 1
   fi
+
   local -r IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT=$1
   local -r IS_CPU2_TEMPERATURE_SENSOR_PRESENT=$2
+  local -r IS_CPU3_TEMPERATURE_SENSOR_PRESENT=$3
+  local -r IS_CPU4_TEMPERATURE_SENSOR_PRESENT=$4
 
-  local -r DATA=$(ipmitool -I $IDRAC_LOGIN_STRING sdr type temperature | grep degrees)
+  # Clear or reset these variables to avoid stale data
+  INLET_TEMPERATURE=""
+  EXHAUST_TEMPERATURE=""
+  CPU1_TEMPERATURE=""
+  CPU2_TEMPERATURE=""
+  CPU3_TEMPERATURE=""
+  CPU4_TEMPERATURE=""
 
-  # Parse CPU data
+  # Grab all temperature sensor data from iDRAC/IPMI
+  local -r DATA=$(ipmitool -I "$IDRAC_LOGIN_STRING" sdr type temperature | grep degrees)
+
+  # On Dell servers, CPU-related sensors often have "3." in their descriptor lines
+  # Then we filter out the numeric values only.
+  # Example: "Temp (CPU1) ... 30 degrees" -> we want "30".
+  # If your server differs, you may need to adjust the grep or parsing logic.
   local -r CPU_DATA=$(echo "$DATA" | grep "3\." | grep -Po '\d{2}')
-  CPU1_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU1_TEMPERATURE_INDEX;}")
+
+  # CPU1 is always retrieved if found
+  CPU1_TEMPERATURE=$(echo "$CPU_DATA" | awk "{print \$$CPU1_TEMPERATURE_INDEX;}")
+
+  # CPU2 if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT is true
   if $IS_CPU2_TEMPERATURE_SENSOR_PRESENT; then
-    CPU2_TEMPERATURE=$(echo $CPU_DATA | awk "{print \$$CPU2_TEMPERATURE_INDEX;}")
+    CPU2_TEMPERATURE=$(echo "$CPU_DATA" | awk "{print \$$CPU2_TEMPERATURE_INDEX;}")
+    # If empty, set a dash to avoid 'unary operator expected'
+    [ -z "$CPU2_TEMPERATURE" ] && CPU2_TEMPERATURE="-"
   else
     CPU2_TEMPERATURE="-"
   fi
 
-  # Parse inlet temperature data
-  INLET_TEMPERATURE=$(echo "$DATA" | grep Inlet | grep -Po '\d{2}' | tail -1)
+  # CPU3 if $IS_CPU3_TEMPERATURE_SENSOR_PRESENT is true
+  if $IS_CPU3_TEMPERATURE_SENSOR_PRESENT; then
+    CPU3_TEMPERATURE=$(echo "$CPU_DATA" | awk "{print \$$CPU3_TEMPERATURE_INDEX;}")
+    [ -z "$CPU3_TEMPERATURE" ] && CPU3_TEMPERATURE="-"
+  else
+    CPU3_TEMPERATURE="-"
+  fi
 
-  # If exhaust temperature sensor is present, parse its temperature data
+  # CPU4 if $IS_CPU4_TEMPERATURE_SENSOR_PRESENT is true
+  if $IS_CPU4_TEMPERATURE_SENSOR_PRESENT; then
+    CPU4_TEMPERATURE=$(echo "$CPU_DATA" | awk "{print \$$CPU4_TEMPERATURE_INDEX;}")
+    [ -z "$CPU4_TEMPERATURE" ] && CPU4_TEMPERATURE="-"
+  else
+    CPU4_TEMPERATURE="-"
+  fi
+
+  # Parse inlet temperature
+  # (some servers label it “Inlet Temp” or “Ambient Temp,” adapt if necessary)
+  INLET_TEMPERATURE=$(echo "$DATA" | grep -i Inlet | grep -Po '\d{2}' | tail -1)
+  [ -z "$INLET_TEMPERATURE" ] && INLET_TEMPERATURE="-"
+
+  # If exhaust sensor present, parse it
   if $IS_EXHAUST_TEMPERATURE_SENSOR_PRESENT; then
-    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep Exhaust | grep -Po '\d{2}' | tail -1)
+    EXHAUST_TEMPERATURE=$(echo "$DATA" | grep -i Exhaust | grep -Po '\d{2}' | tail -1)
+    [ -z "$EXHAUST_TEMPERATURE" ] && EXHAUST_TEMPERATURE="-"
   else
     EXHAUST_TEMPERATURE="-"
   fi
@@ -124,12 +180,12 @@ function get_Dell_server_model() {
 }
 
 # Define functions to check if CPU 1 and CPU 2 temperatures are above the threshold
-function CPU1_OVERHEATING() { [ $CPU1_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
-function CPU2_OVERHEATING() { [ $CPU2_TEMPERATURE -gt $CPU_TEMPERATURE_THRESHOLD ]; }
+function CPU1_OVERHEATING() { [ "$CPU1_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD" ] 2>/dev/null; }
+function CPU2_OVERHEATING() { [ "$CPU2_TEMPERATURE" -gt "$CPU_TEMPERATURE_THRESHOLD" ] 2>/dev/null; }
 
 function print_error() {
   local -r ERROR_MESSAGE="$1"
-  printf "/!\ Error /!\ %s." "$ERROR_MESSAGE" >&2
+  printf "/!\\ Error /!\\ %s." "$ERROR_MESSAGE" >&2
 }
 
 function print_error_and_exit() {
@@ -141,7 +197,7 @@ function print_error_and_exit() {
 
 function print_warning() {
   local -r WARNING_MESSAGE="$1"
-  printf "/!\ Warning /!\ %s." "$WARNING_MESSAGE"
+  printf "/!\\ Warning /!\\ %s." "$WARNING_MESSAGE"
 }
 
 function print_warning_and_exit() {
